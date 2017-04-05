@@ -1,0 +1,24 @@
+#!/usr/bin/env ruby
+
+#  Author: AryBin
+#   dmacs: Abbv for dump macs
+#    Note: root privilege is required.
+
+require 'date'
+require 'socket'
+
+if `id -u`.to_i > 0
+  puts "should run in root mode."
+  exit
+end
+ 
+Socket.getifaddrs.select{|i|i.addr.ipv4? and !i.addr.ipv4_loopback?}.each do |i|
+  save_location=Time.now.strftime('%y%m%d-%H%M%S-')+(ARGV.first or 'noname')
+  inet_addr=i.addr.inspect_sockaddr
+  netmask=i.netmask.inspect_sockaddr.scan(/\d+/).map(&:to_i).inject(32){|i,j|i-Math.log(256-j,2)}.to_i
+  inet_addr_cidr="#{inet_addr}/#{netmask}"
+  puts "Scanning #{inet_addr_cidr} (#{2**(32-netmask)} IPs)"
+  results = `nmap #{inet_addr_cidr} -sn | grep -i mac | tee #{save_location}`
+  puts results,"#{results.split("\n").size} host(s) up, saved to file \"#{save_location}\""
+  sleep 1
+end
